@@ -16,7 +16,8 @@ import (
 
 type OrderServer struct {
 	orderpb.UnimplementedOrderServiceServer
-	repo *order.Repository
+	repo     *order.Repository
+	producer *order.Producer
 }
 
 func (s *OrderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderRequest) (*orderpb.Order, error) {
@@ -28,6 +29,10 @@ func (s *OrderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderR
 	if err := s.repo.CreateOrder(ctx, o); err != nil {
 		return nil, err
 	}
+	if err := s.producer.PublishOrder(ctx, o); err != nil {
+		log.Printf("Failed to publish order to kafka: %v", err)
+	}
+
 	return &orderpb.Order{
 		Id:        o.ID,
 		Customer:  o.Customer,
@@ -51,10 +56,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("filed to listen: %v", err)
 	}
-
+	producer := order.NewProducer(
+		[]string{"localhost:29092"},
+		"orders",
+	)
+	defer producer.Close()
 	grpcServer := grpc.NewServer()
 
-	orderpb.RegisterOrderServiceServer(grpcServer, &OrderServer{repo: repo})
+	orderpb.RegisterOrderServiceServer(grpcServer, &OrderServer{
+		repo:     repo,
+		producer: producer,
+	})
 
 	reflection.Register(grpcServer)
 	log.Println(" grpc server running on 50051")
